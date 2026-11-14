@@ -1,3 +1,4 @@
+from typing import Literal
 import json
 from collections.abc import Callable
 from functools import wraps
@@ -116,12 +117,21 @@ def generate_source(job: Job, source: Source, ctx: Context) -> None:
             )
             out = directory / f"tracks/{source.id}.attempt{source.attempts}.wav"
             attempts.append(out)
-            path = ctx.tools.generate(
-                directory / job.video_path,
-                source.plan,
-                out,
-                ctx.settings.gen_seed + source.attempts - 1,
-            )
+            with _measure(
+                job,
+                ctx,
+                "generate",
+                source_id=source.id,
+                round_number=round_number,
+                attempt=source.attempts,
+                model_id=ctx.settings.gen_model,
+            ):
+                path = ctx.tools.generate(
+                    directory / job.video_path,
+                    source.plan,
+                    out,
+                    ctx.settings.gen_seed + source.attempts - 1,
+                )
             update_step(
                 job,
                 ctx,
@@ -141,11 +151,22 @@ def generate_source(job: Job, source: Source, ctx: Context) -> None:
                     message="; ".join(messages),
                 ),
             )
-            result = ctx.tools.score_generation(
-                path,
-                source.plan,
-                siblings(job, source),
-            )
+            with _measure(
+                job,
+                ctx,
+                "score_generation",
+                source_id=source.id,
+                round_number=round_number,
+                attempt=source.attempts,
+                model_id="lukewys/laion_clap",
+            ) as timing:
+                result = ctx.tools.score_generation(
+                    path,
+                    source.plan,
+                    siblings(job, source),
+                )
+                if not result.passed:
+                    timing.status = "warning"
             messages.append(
                 f"attempt {source.attempts}: correct={result.scores.get('text_correct')} "
                 f"margin={result.scores.get('text_margin')} {result.reason}".rstrip()
@@ -372,7 +393,11 @@ def refresh_residual(job: Job, ctx: Context) -> None:
 
 
 def analyze(
-    job: Job, ctx: Context, on_finish: Callable[[], None] = lambda: None
+    job: Job,
+    ctx: Context,
+    on_finish: Callable[[], None] = lambda: None,
+    *,
+    mode: Literal["separate", "generate"] | None = None,
 ) -> Job:
     """Run the analysis graph. on_finish runs before the final state is saved."""
     directory = ctx.store.dir(job.id)
@@ -393,6 +418,8 @@ def analyze(
             if job.silent:
                 write_silence(directory / "audio.wav", duration, channels)
                 write_silence(directory / "mono.wav", duration, 1)
+        if mode == "separate" and job.silent:
+            raise ValueError("separate mode requires non-silent input audio")
         job.audio_path, job.mono_path, job.peaks_path = (
             "audio.wav",
             "mono.wav",
@@ -440,7 +467,9 @@ def analyze(
                 source = Source(
                     id=f"s{i}",
                     plan=plan_item,
-                    origin="generated" if job.silent else "separated",
+                    origin="generated"
+                    if mode == "generate" or job.silent
+                    else "separated",
                 )
             else:
                 source.id, source.plan = f"s{i}", plan_item
@@ -547,7 +576,11 @@ def analyze(
     def residual(state: AnalysisState) -> dict:
         nonlocal active_key
         active_key = "residual"
-        refresh_residual(job, ctx)
+        if mode == "generate":
+            job.residual.path = None
+            job.residual.keep = False
+        else:
+            refresh_residual(job, ctx)
         return {}
 
     def timed_preprocess(state: AnalysisState) -> dict:

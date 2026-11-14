@@ -4,6 +4,7 @@ import csv
 from collections.abc import Sequence
 from pathlib import Path
 from time import perf_counter
+from typing import Literal
 
 import typer
 
@@ -15,7 +16,12 @@ from audyssey.store import JobStore
 from audyssey.tools import load_tools
 
 
-def run_batch(videos: Sequence[Path], settings: Settings, render: bool) -> bool:
+def run_batch(
+    videos: Sequence[Path],
+    settings: Settings,
+    render: bool,
+    mode: Literal["separate", "generate"],
+) -> bool:
     ctx = Context(load_tools(settings), settings, JobStore(settings.work_dir))
     summary = ctx.store.root / "batch.csv"
     failed = False
@@ -28,7 +34,8 @@ def run_batch(videos: Sequence[Path], settings: Settings, render: bool) -> bool:
             job_id = job.id
             job.duration = duration
             ctx.store.save(job)
-            job = analyze(job, ctx)
+            # 하나씩 진행
+            job = analyze(job, ctx, mode=mode)
             if job.state == "failed":
                 raise RuntimeError(job.error or "analysis failed")
             if render:

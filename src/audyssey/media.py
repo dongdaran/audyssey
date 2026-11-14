@@ -45,7 +45,7 @@ def probe(video: Path) -> tuple[float, int]:
 def check_upload(video: Path, max_duration_s: float) -> float:
     duration, _ = probe(video)
     if duration > max_duration_s:
-        raise MediaError(f"video is {duration:.1f}s; maximum is {max_duration_s:.0f}s")
+        raise MediaError(f"video is {duration:.6f}s; maximum is {max_duration_s:g}s")
     return duration
 
 

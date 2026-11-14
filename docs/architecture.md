@@ -6,7 +6,7 @@
 ## CLI로만 실행하기
 
 RunPod PyTorch Pod에서 영상을 배치 처리할 때는 서버 API를 호출할 필요가 없습니다.
-`audyssey batch video1.mp4 video2.mp4`가 기존 분석 그래프와 렌더링 명령을 직접 실행합니다.
+`audyssey batch --mode separate video1.mp4 video2.mp4`가 기존 분석 그래프와 렌더링 명령을 직접 실행합니다.
 GPU 도구를 `real`로 설정하면 같은 프로세스에서 모델을 사용하고,
 플래너를 Gemini로 설정한 경우 계획·검증만 외부 API를 호출합니다.
 

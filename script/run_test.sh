@@ -10,7 +10,7 @@ if [[ "${1:-}" == "--stub" ]]; then
 fi
 if [[ $# -eq 0 || "${1:-}" == "--help" ]]; then
     cat <<'HELP'
-Usage: bash script/run_test.sh [--stub] VIDEO [VIDEO ...] [--no-render]
+Usage: bash script/run_test.sh [--stub] --mode separate|generate VIDEO [VIDEO ...] [--no-render]
 
 Default: real GPU models in gpu/.venv, external planner configured via environment.
 --stub: CPU smoke run with fake models in .venv; no API key or weights needed.

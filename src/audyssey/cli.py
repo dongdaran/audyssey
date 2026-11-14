@@ -30,12 +30,15 @@ def batch(
     videos: Annotated[
         list[Path], typer.Argument(help="Input videos, processed in order.")
     ],
+    mode: Annotated[
+        Literal["separate", "generate"], typer.Option(help="Required processing mode.")
+    ],
     render: Annotated[bool, typer.Option(help="Export mix, video and stems.")] = True,
 ) -> None:
     """Process videos locally and append batch.csv and timings.csv."""
     from audyssey.batch import run_batch
 
-    if run_batch(videos, Settings(), render):
+    if run_batch(videos, Settings(), render, mode):
         raise typer.Exit(1)
 
 

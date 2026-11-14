@@ -9,6 +9,7 @@ from typing import TypeVar
 
 from langsmith import trace
 from langsmith.run_helpers import tracing_context
+from openai import APIStatusError
 from openai.types.chat import ChatCompletionContentPartParam, ChatCompletionMessageParam
 from pydantic import TypeAdapter, ValidationError
 
@@ -80,11 +81,20 @@ def _request(
                 },
             ) as run:
                 with tracing_context(enabled=False, parent=False):
-                    response = client.chat.completions.create(
-                        model=settings.planner_model,
-                        messages=messages,
-                        response_format={"type": "json_object"},
-                    )
+                    try:
+                        response = client.chat.completions.create(
+                            model=settings.planner_model,
+                            messages=messages,
+                            response_format={"type": "json_object"},
+                        )
+                    except APIStatusError as exc:
+                        detail = exc.response.text.strip() or str(exc)
+                        if settings.planner_api_key:
+                            detail = detail.replace(settings.planner_api_key, "***")
+                        raise ValueError(
+                            f"planner HTTP {exc.status_code} "
+                            f"(model={settings.planner_model}): {detail[:2000]}"
+                        ) from None
                 usage = response.usage
                 run.end(
                     outputs={

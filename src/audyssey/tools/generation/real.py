@@ -12,6 +12,7 @@ from scipy.signal import resample_poly
 from audyssey.contracts import FilterResult, SourcePlan
 from audyssey.media import probe, read_wav, write_wav
 from audyssey.settings import Settings
+from audyssey.timing import measure_tool_metric
 
 # shortcut: one GPU call per process, add a queue if throughput matters
 _model_lock = Lock()
@@ -137,47 +138,54 @@ def _load():
 
 def generate(video: Path, plan: SourcePlan, out: Path, seed: int) -> Path:
     settings = Settings()
-    duration, _ = probe(video)
-    spans = windows(duration, settings.gen_single_max_s, settings.gen_window_s)
+    with measure_tool_metric("processing"):
+        duration, _ = probe(video)
+        spans = windows(duration, settings.gen_single_max_s, settings.gen_window_s)
     with _model_lock:
-        torch, evaluation, seq, encoder, generator, features, flow = _load()
-        rng = torch.Generator(device=settings.gen_device)
-        rng.manual_seed(seed)
-        frames = evaluation.load_video(
-            video, duration, load_all_frames=False
-        ).sync_frames
-        chunks = []
-        with torch.inference_mode():
-            for start, end in spans:
-                sync = frames[round(start * 25) : round(end * 25)]
-                if not sync.shape[0]:
-                    raise ValueError(
-                        "no video frames were decoded for the generation window"
+        with measure_tool_metric("model_load"):
+            torch, evaluation, seq, encoder, generator, features, flow = _load()
+        with measure_tool_metric("processing"):
+            rng = torch.Generator(device=settings.gen_device)
+            rng.manual_seed(seed)
+            frames = evaluation.load_video(
+                video, duration, load_all_frames=False
+            ).sync_frames
+            chunks = []
+            with torch.inference_mode():
+                for start, end in spans:
+                    sync = frames[round(start * 25) : round(end * 25)]
+                    if not sync.shape[0]:
+                        raise ValueError(
+                            "no video frames were decoded for the generation window"
+                        )
+                    if sync.shape[0] < 16:
+                        sync = torch.cat(
+                            [
+                                sync,
+                                sync[-1:].expand(16 - sync.shape[0], *sync.shape[1:]),
+                            ]
+                        )
+                    # Avoid losing one frame when SequenceConfig multiplies duration by 25.
+                    seq.duration = math.nextafter(sync.shape[0] / 25, math.inf)
+                    generator.update_seq_lengths(
+                        seq.latent_seq_len, seq.clip_seq_len, seq.sync_seq_len
                     )
-                if sync.shape[0] < 16:
-                    sync = torch.cat(
-                        [sync, sync[-1:].expand(16 - sync.shape[0], *sync.shape[1:])]
+                    encoder.update_seq_lengths(video_seq_len=seq.sync_seq_len)
+                    audio = evaluation.generate(
+                        None,
+                        sync.unsqueeze(0),
+                        [plan.description],
+                        feature_utils=features,
+                        net_video_enc=encoder,
+                        net_generator=generator,
+                        fm=flow,
+                        rng=rng,
+                        cfg_strength=settings.gen_cfg,
                     )
-                # Avoid losing one frame when SequenceConfig multiplies duration by 25.
-                seq.duration = math.nextafter(sync.shape[0] / 25, math.inf)
-                generator.update_seq_lengths(
-                    seq.latent_seq_len, seq.clip_seq_len, seq.sync_seq_len
-                )
-                encoder.update_seq_lengths(video_seq_len=seq.sync_seq_len)
-                audio = evaluation.generate(
-                    None,
-                    sync.unsqueeze(0),
-                    [plan.description],
-                    feature_utils=features,
-                    net_video_enc=encoder,
-                    net_generator=generator,
-                    fm=flow,
-                    rng=rng,
-                    cfg_strength=settings.gen_cfg,
-                )
-                mono = audio.float().cpu().numpy()[0].reshape(-1)
-                chunks.append(resample_poly(mono, 160, 147))
-    return write_wav(out, crossfade_join(chunks, spans, 48000))
+                    mono = audio.float().cpu().numpy()[0].reshape(-1)
+                    chunks.append(resample_poly(mono, 160, 147))
+    with measure_tool_metric("processing"):
+        return write_wav(out, crossfade_join(chunks, spans, 48000))
 
 
 @cache
@@ -206,43 +214,47 @@ def score_generation(
     plan: SourcePlan,
     siblings: list[SourcePlan],
 ) -> FilterResult:
-    # Nothing to tell apart; also avoids CLAP's tokenizer, which breaks on one text.
-    if not siblings:
-        return FilterResult(passed=True, scores={"text_correct": 1})
-    threshold = Settings().generation_margin_threshold
-    mono = read_wav(track).mean(axis=1)
-    # CLAP randomly crops inputs over 10 s; embed fixed 10 s windows and average.
-    spans = windows(len(mono) / 48000, 10, 10)
-    clips = np.stack(
-        [mono]
-        if len(spans) == 1
-        else [
-            mono[min(round(start * 48000), len(mono) - 480000) :][:480000]
-            for start, _ in spans
-        ]
-    )
-    with _model_lock:
-        torch, clap = _load_clap()
-        with torch.inference_mode():
-            # CLAP returns L2-normalized embeddings.
-            audio = clap.get_audio_embedding_from_data(x=clips).mean(axis=0)
-            texts = clap.get_text_embedding(
-                [plan.description, *[s.description for s in siblings]]
-            )
-    similarities = texts @ (audio / np.linalg.norm(audio))
-    best = int(np.argmax(similarities[1:]))
-    margin = float(similarities[0] - similarities[best + 1])
-    correct = float(margin > 0)
-    passed = correct == 1 and margin >= threshold
-    reason = ""
-    if not passed:
-        reason = (
-            f"closer to sibling: {siblings[best].name}"
-            if not correct
-            else f"text margin {margin:.3f} below threshold {threshold}"
+    with measure_tool_metric("processing"):
+        # Nothing to tell apart; also avoids CLAP's tokenizer, which breaks on one text.
+        if not siblings:
+            return FilterResult(passed=True, scores={"text_correct": 1})
+        threshold = Settings().generation_margin_threshold
+        mono = read_wav(track).mean(axis=1)
+        # CLAP randomly crops inputs over 10 s; embed fixed 10 s windows and average.
+        spans = windows(len(mono) / 48000, 10, 10)
+        clips = np.stack(
+            [mono]
+            if len(spans) == 1
+            else [
+                mono[min(round(start * 48000), len(mono) - 480000) :][:480000]
+                for start, _ in spans
+            ]
         )
-    return FilterResult(
-        passed=passed,
-        scores={"text_correct": correct, "text_margin": margin},
-        reason=reason,
-    )
+    with _model_lock:
+        with measure_tool_metric("model_load"):
+            torch, clap = _load_clap()
+        with measure_tool_metric("processing"):
+            with torch.inference_mode():
+                # CLAP returns L2-normalized embeddings.
+                audio = clap.get_audio_embedding_from_data(x=clips).mean(axis=0)
+                texts = clap.get_text_embedding(
+                    [plan.description, *[s.description for s in siblings]]
+                )
+    with measure_tool_metric("processing"):
+        similarities = texts @ (audio / np.linalg.norm(audio))
+        best = int(np.argmax(similarities[1:]))
+        margin = float(similarities[0] - similarities[best + 1])
+        correct = float(margin > 0)
+        passed = correct == 1 and margin >= threshold
+        reason = ""
+        if not passed:
+            reason = (
+                f"closer to sibling: {siblings[best].name}"
+                if not correct
+                else f"text margin {margin:.3f} below threshold {threshold}"
+            )
+        return FilterResult(
+            passed=passed,
+            scores={"text_correct": correct, "text_margin": margin},
+            reason=reason,
+        )
