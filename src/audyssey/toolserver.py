@@ -11,7 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from audyssey.contracts import FilterResult, GroundResult, SourcePlan, VisualHint
 from audyssey.settings import Settings
-from audyssey.timing import collect_tool_metrics, server_timing_header
+from audyssey.timing import collect_tool_metrics, server_timing_header, resource_header
 from audyssey.uploads import save_upload
 
 # ponytail: one GPU model, one request at a time; add a queue or batching if throughput matters
@@ -34,6 +34,7 @@ def create_tool_app(
                 if not compare_digest(supplied, f"Bearer {token}".encode()):
                     return JSONResponse({"detail": "unauthorized"}, status_code=401)
             response = await call_next(request)
+        response.headers["X-Audyssey-Resources"] = resource_header(metrics)
         timing = server_timing_header(metrics)
         if timing:
             response.headers["Server-Timing"] = timing

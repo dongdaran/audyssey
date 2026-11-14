@@ -3,21 +3,24 @@
 import csv
 import contextvars
 import logging
+import json
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Iterator, Mapping
+
+from audyssey.resources import RESOURCE_FIELDS, ResourceSampler
 
 _LOGGER = logging.getLogger(__name__)
 _CSV_LOCK = Lock()
 _ACTIVE_SAMPLE: contextvars.ContextVar["TimingSample | None"] = contextvars.ContextVar(
     "audyssey_timing_sample", default=None
 )
-_TOOL_METRICS: contextvars.ContextVar[dict[str, float] | None] = (
-    contextvars.ContextVar("audyssey_tool_timing_metrics", default=None)
+_TOOL_METRICS: contextvars.ContextVar[dict[str, float] | None] = contextvars.ContextVar(
+    "audyssey_tool_timing_metrics", default=None
 )
 
 _CSV_FIELDS = (
@@ -32,6 +35,8 @@ _CSV_FIELDS = (
     "model_load_s",
     "processing_s",
     "model_id",
+    *RESOURCE_FIELDS,
+    *("remote_" + name for name in RESOURCE_FIELDS),
 )
 
 
@@ -49,6 +54,7 @@ class TimingSample:
     model_load_s: float | None = None
     processing_s: float | None = None
     timestamp_utc: str = ""
+    resources: dict[str, float] = field(default_factory=dict)
 
 
 @contextmanager
@@ -74,6 +80,8 @@ def measure(
         timestamp_utc=datetime.now(timezone.utc).isoformat(),
     )
     token = _ACTIVE_SAMPLE.set(sample)
+    sampler = ResourceSampler()
+    sampler.start()
     started = time.perf_counter()
     try:
         yield sample
@@ -82,6 +90,7 @@ def measure(
         raise
     finally:
         sample.duration_s = time.perf_counter() - started
+        sample.resources.update(sampler.finish())
         _ACTIVE_SAMPLE.reset(token)
         _append_sample(sample)
 
@@ -110,9 +119,12 @@ def collect_tool_metrics() -> Iterator[dict[str, float]]:
     """Collect nested tool timings for one HTTP request."""
     metrics: dict[str, float] = {}
     token = _TOOL_METRICS.set(metrics)
+    sampler = ResourceSampler()
+    sampler.start()
     try:
         yield metrics
     finally:
+        metrics.update(sampler.finish())
         _TOOL_METRICS.reset(token)
 
 
@@ -170,9 +182,25 @@ def _append_sample(sample: TimingSample) -> None:
         ),
         "model_id": sample.model_id or "",
     }
+    row.update(
+        {
+            name: f"{sample.resources[name]:.3f}" if name in sample.resources else ""
+            for name in _CSV_FIELDS
+            if name in RESOURCE_FIELDS or name.startswith("remote_")
+        }
+    )
     try:
         sample.path.parent.mkdir(parents=True, exist_ok=True)
         with _CSV_LOCK:
+            if sample.path.exists() and sample.path.stat().st_size:
+                with sample.path.open(newline="", encoding="utf-8") as existing:
+                    header = next(csv.reader(existing), [])
+                if header != list(_CSV_FIELDS):
+                    archive = sample.path.with_name(
+                        f"{sample.path.stem}.{time.time_ns()}.csv"
+                    )
+                    sample.path.rename(archive)
+                    _LOGGER.warning("archived old timing CSV at %s", archive)
             needs_header = not sample.path.exists() or sample.path.stat().st_size == 0
             with sample.path.open("a", newline="", encoding="utf-8") as stream:
                 writer = csv.DictWriter(stream, fieldnames=_CSV_FIELDS)
@@ -181,3 +209,25 @@ def _append_sample(sample: TimingSample) -> None:
                 writer.writerow(row)
     except OSError:
         _LOGGER.exception("could not append timing row to %s", sample.path)
+
+
+def resource_header(metrics: Mapping[str, float]) -> str:
+    return json.dumps(
+        {name: metrics[name] for name in RESOURCE_FIELDS if name in metrics}
+    )
+
+
+def record_resource_header(header: str | None) -> None:
+    sample = _ACTIVE_SAMPLE.get()
+    if sample is None or not header:
+        return
+    try:
+        metrics = json.loads(header)
+        if not isinstance(metrics, dict):
+            return
+        for name in RESOURCE_FIELDS:
+            value = metrics.get(name)
+            if isinstance(value, (int, float)) and 0 <= value <= 100:
+                sample.resources["remote_" + name] = float(value)
+    except (ValueError, TypeError):
+        return

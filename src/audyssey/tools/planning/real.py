@@ -179,13 +179,22 @@ def plan(
     )
     response = _request(settings, messages, _Sources)
     sources = []
-    for item in response.sources:
+    rejected = []
+    for index, item in enumerate(response.sources):
         try:
             sources.append(_source(item, duration))
+        except ValidationError as exc:
+            # Report schema failures without echoing model output or credentials.
+            details = "; ".join(
+                f"{'.'.join(str(part) for part in error['loc']) or 'source'}: {error['type']}"
+                for error in exc.errors(include_input=False, include_context=False)[:5]
+            )
+            rejected.append(f"source[{index}]: {details}")
         except ValueError:
-            continue
+            rejected.append(f"source[{index}]: invalid source fields")
     if not sources:
-        raise RuntimeError("planner returned no valid sources")
+        detail = "; ".join(rejected[:5]) if rejected else "sources list was empty"
+        raise RuntimeError(f"planner returned no valid sources: {detail}")
     return sources
 
 
