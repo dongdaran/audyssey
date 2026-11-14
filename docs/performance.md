@@ -1,5 +1,7 @@
 # 실행 시간 기록
 
+`audyssey batch`로 서버 없이 실행할 수도 있습니다. CLI에서는 `$AUDYSSEY_WORK_DIR/timings.csv`(기본 `work/jobs/timings.csv`)에 기록하고, 영상별 전체 시간은 같은 폴더의 `batch.csv`에 기록합니다. [RunPod CLI 실행](runpod-cli.md)을 참고하세요.
+
 Audyssey는 파이프라인 단계별 실행 시간을 main 서버의 작업 디렉터리에 CSV로 기록합니다. Docker Compose 기본 설정에서는 다음 파일입니다.
 
 ```text

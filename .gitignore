@@ -320,3 +320,6 @@ data/
 
 # Audyssey local job media and generated tracks
 /work/jobs/
+
+# Private RunPod CLI settings
+.env.runpod

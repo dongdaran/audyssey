@@ -8,6 +8,8 @@ Audyssey는 짧은 영상(10초 안팎)의 오디오를 소리를 내는 대상�
 
 현재는 실제 모델로 전체 흐름이 동작하는 것을 확인한 단계이며, 품질 개선은 모듈 담당자별로 진행합니다.
 
+RunPod에서 `uv run --project gpu --env-file .env.runpod audyssey batch /workspace/inputs/*.mp4`로 여러 영상을 처리하고 latency·결과물을 확인하려면 [CLI 배치 가이드](docs/runpod-cli.md)를 참고하세요.
+
 ## 빠른 실행 (GPU 없이)
 
 ```bash

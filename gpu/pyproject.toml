@@ -3,7 +3,7 @@ name = "audyssey-gpu"
 version = "0.1.0"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-    "audyssey[ui]",
+    "audyssey[ui,llm]",
     "torch",
     "torchaudio",
     "torchvision",

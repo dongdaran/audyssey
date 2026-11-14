@@ -3,6 +3,16 @@
 [README](../README.md)의 처리 흐름과 서버 구성 그림을 보충하는 문서입니다. 설계 원문은
 [docs/superpowers/specs/2026-11-09-audyssey-skeleton-design.md](superpowers/specs/2026-11-09-audyssey-skeleton-design.md)에 있습니다.
 
+## CLI로만 실행하기
+
+RunPod PyTorch Pod에서 영상을 배치 처리할 때는 서버 API를 호출할 필요가 없습니다.
+`audyssey batch video1.mp4 video2.mp4`가 기존 분석 그래프와 렌더링 명령을 직접 실행합니다.
+GPU 도구를 `real`로 설정하면 같은 프로세스에서 모델을 사용하고,
+플래너를 Gemini로 설정한 경우 계획·검증만 외부 API를 호출합니다.
+
+설치부터 결과·latency CSV 확인까지는 [RunPod CLI 배치 가이드](runpod-cli.md)를 참고하세요.
+아래 서버 구성과 HTTP API는 웹 UI나 원격 도구 서버를 사용하는 배포 방식의 설명입니다.
+
 ## 서버 구성
 
 | 구성 | 하는 일 | 실행 환경 |
@@ -138,7 +148,8 @@ src/audyssey/
   store.py       Job ↔ work/jobs/<id>/job.json
   api.py         HTTP API + 개발용 화면
   toolserver.py  도구 서버
-  cli.py         audyssey serve | audyssey tool-server
+  cli.py         audyssey batch | audyssey serve | audyssey tool-server
+  batch.py       CLI 순차 배치, 렌더링, 영상별 요약 CSV
   media.py       ffmpeg 추출·프레임·WAV 입출력
   devui/         빌드 없는 개발용 화면 (최종 UI 아님)
   tools/

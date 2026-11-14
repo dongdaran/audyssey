@@ -1,4 +1,5 @@
 from enum import Enum
+from pathlib import Path
 from typing import Annotated, Literal
 
 import typer
@@ -22,6 +23,20 @@ app = typer.Typer()
 @app.callback()
 def callback() -> None:
     """Audyssey audio editing skeleton."""
+
+
+@app.command()
+def batch(
+    videos: Annotated[
+        list[Path], typer.Argument(help="Input videos, processed in order.")
+    ],
+    render: Annotated[bool, typer.Option(help="Export mix, video and stems.")] = True,
+) -> None:
+    """Process videos locally and append batch.csv and timings.csv."""
+    from audyssey.batch import run_batch
+
+    if run_batch(videos, Settings(), render):
+        raise typer.Exit(1)
 
 
 @app.command()
