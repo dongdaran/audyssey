@@ -11,6 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from audyssey.contracts import FilterResult, GroundResult, SourcePlan, VisualHint
 from audyssey.settings import Settings
+from audyssey.timing import collect_tool_metrics, server_timing_header
 from audyssey.uploads import save_upload
 
 # ponytail: one GPU model, one request at a time; add a queue or batching if throughput matters
@@ -27,11 +28,16 @@ def create_tool_app(
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next):
-        if token and request.url.path != "/health":
-            supplied = request.headers.get("authorization", "").encode()
-            if not compare_digest(supplied, f"Bearer {token}".encode()):
-                return JSONResponse({"detail": "unauthorized"}, status_code=401)
-        return await call_next(request)
+        with collect_tool_metrics() as metrics:
+            if token and request.url.path != "/health":
+                supplied = request.headers.get("authorization", "").encode()
+                if not compare_digest(supplied, f"Bearer {token}".encode()):
+                    return JSONResponse({"detail": "unauthorized"}, status_code=401)
+            response = await call_next(request)
+        timing = server_timing_header(metrics)
+        if timing:
+            response.headers["Server-Timing"] = timing
+        return response
 
     @app.get("/health")
     def health() -> dict[

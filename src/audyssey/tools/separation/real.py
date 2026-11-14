@@ -8,6 +8,7 @@ import numpy as np
 from audyssey.contracts import SourcePlan
 from audyssey.media import read_wav, write_wav
 from audyssey.settings import Settings
+from audyssey.timing import measure_tool_metric
 
 # shortcut: one GPU model per process, one call at a time; batch or queue if throughput matters
 _model_lock = Lock()
@@ -63,27 +64,31 @@ def separate(
     mono: Path, plan: SourcePlan, video: Path | None, out: Path, attempt: int
 ) -> Path:
     settings = Settings()
-    audio = read_wav(mono)
-    anchors = (
-        [[["+", span.start, span.end] for span in plan.spans]] if plan.spans else None
-    )
     with _model_lock:
-        torch, model, processor = _load()
-        batch = processor(
-            descriptions=[plan.description],
-            audios=[torch.from_numpy(audio.T)],
-            anchors=anchors,
-            **({"masked_videos": [str(video)]} if video is not None else {}),
-        ).to(settings.sam_audio_device)
-        with torch.inference_mode():
-            torch.manual_seed(attempt)
-            result = model.separate(
-                batch,
-                reranking_candidates=settings.sam_audio_reranking_candidates,
-                predict_spans=settings.sam_audio_predict_spans,
+        with measure_tool_metric("model_load"):
+            torch, model, processor = _load()
+        with measure_tool_metric("processing"):
+            audio = read_wav(mono)
+            anchors = (
+                [[["+", span.start, span.end] for span in plan.spans]]
+                if plan.spans
+                else None
             )
-        target = result.target[0].detach().cpu().float().numpy().reshape(-1, 1)
-    track = np.zeros((len(audio), 1), dtype=np.float32)
-    length = min(len(audio), len(target))
-    track[:length] = target[:length]
-    return write_wav(out, track)
+            batch = processor(
+                descriptions=[plan.description],
+                audios=[torch.from_numpy(audio.T)],
+                anchors=anchors,
+                **({"masked_videos": [str(video)]} if video is not None else {}),
+            ).to(settings.sam_audio_device)
+            with torch.inference_mode():
+                torch.manual_seed(attempt)
+                result = model.separate(
+                    batch,
+                    reranking_candidates=settings.sam_audio_reranking_candidates,
+                    predict_spans=settings.sam_audio_predict_spans,
+                )
+            target = result.target[0].detach().cpu().float().numpy().reshape(-1, 1)
+            track = np.zeros((len(audio), 1), dtype=np.float32)
+            length = min(len(audio), len(target))
+            track[:length] = target[:length]
+            return write_wav(out, track)

@@ -13,6 +13,7 @@ import numpy as np
 
 from audyssey.contracts import GroundResult, VisualHint
 from audyssey.settings import Settings
+from audyssey.timing import measure_tool_metric
 
 # shortcut: one model and one video at a time; add a queue if throughput matters
 _model_lock = Lock()
@@ -82,7 +83,8 @@ def _video_info(video: Path) -> dict:
 
 @contextmanager
 def _session(resource: Path):
-    torch, model = _load()
+    with measure_tool_metric("model_load"):
+        torch, model = _load()
     with (
         torch.cuda.device(Settings().sam3_device),
         torch.inference_mode(),
@@ -125,6 +127,11 @@ def _hint_index(info: dict, hint: VisualHint) -> int:
 
 
 def locate(video: Path, hint: VisualHint) -> GroundResult:
+    with measure_tool_metric("processing"):
+        return _locate(video, hint)
+
+
+def _locate(video: Path, hint: VisualHint) -> GroundResult:
     # Only the hint frame matters: SAM3 takes an image as a one-frame video, so the
     # whole clip is never decoded onto the GPU.
     index = _hint_index(_video_info(video), hint)
@@ -150,6 +157,11 @@ def locate(video: Path, hint: VisualHint) -> GroundResult:
 
 
 def mask_video(video: Path, hint: VisualHint, out: Path) -> Path:
+    with measure_tool_metric("processing"):
+        return _mask_video_entry(video, hint, out)
+
+
+def _mask_video_entry(video: Path, hint: VisualHint, out: Path) -> Path:
     track_fps = Settings().sam3_track_fps
     if track_fps:
         with TemporaryDirectory() as tmp:

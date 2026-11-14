@@ -28,6 +28,7 @@ from audyssey.settings import Settings
 from audyssey.store import JobStore
 from audyssey.tools import Tools
 from audyssey.tools.editing.render import compute_residual, render
+from audyssey.timing import measure
 
 
 @dataclass
@@ -192,6 +193,27 @@ def generate_source(job: Job, source: Source, ctx: Context) -> None:
     ctx.store.save(job)
 
 
+def _measure(
+    job: Job,
+    ctx: Context,
+    stage: str,
+    *,
+    source_id: str | None = None,
+    round_number: int | None = None,
+    attempt: int | None = None,
+    model_id: str | None = None,
+):
+    return measure(
+        ctx.store.root / "timings.csv",
+        job_id=job.id,
+        stage=stage,
+        source_id=source_id,
+        round_number=round_number,
+        attempt=attempt,
+        model_id=model_id,
+    )
+
+
 def process_source(job: Job, source: Source, ctx: Context) -> None:
     if job.silent or source.origin == "generated":
         generate_source(job, source, ctx)
@@ -218,19 +240,35 @@ def process_source(job: Job, source: Source, ctx: Context) -> None:
                 video = None
             elif hint != masked_for:
                 # Masking runs SAM3 over the whole clip; reuse it while the hint holds.
-                video = ctx.tools.mask_video(
-                    directory / job.video_path,
-                    hint,
-                    directory / f"masks/{source.id}.mp4",
-                )
+                with _measure(
+                    job,
+                    ctx,
+                    "mask_video",
+                    source_id=source.id,
+                    attempt=source.attempts,
+                    model_id=ctx.settings.sam3_model,
+                ):
+                    video = ctx.tools.mask_video(
+                        directory / job.video_path,
+                        hint,
+                        directory / f"masks/{source.id}.mp4",
+                    )
                 masked_for = hint
-            path = ctx.tools.separate(
-                directory / job.mono_path,
-                source.plan,
-                video,
-                directory / f"tracks/{source.id}.wav",
-                source.attempts,
-            )
+            with _measure(
+                job,
+                ctx,
+                "separate",
+                source_id=source.id,
+                attempt=source.attempts,
+                model_id=ctx.settings.sam_audio_model,
+            ):
+                path = ctx.tools.separate(
+                    directory / job.mono_path,
+                    source.plan,
+                    video,
+                    directory / f"tracks/{source.id}.wav",
+                    source.attempts,
+                )
             source.track_path = str(path.relative_to(directory))
             update_step(
                 job,
@@ -252,9 +290,19 @@ def process_source(job: Job, source: Source, ctx: Context) -> None:
                     max_rounds=maximum,
                 ),
             )
-            source.filter = ctx.tools.judge(
-                directory / job.mono_path, path, source.plan
-            )
+            with _measure(
+                job,
+                ctx,
+                "judge",
+                source_id=source.id,
+                attempt=source.attempts,
+                model_id=ctx.settings.sam_audio_judge_model,
+            ) as timing:
+                source.filter = ctx.tools.judge(
+                    directory / job.mono_path, path, source.plan
+                )
+                if not source.filter.passed:
+                    timing.status = "warning"
             update_step(
                 job,
                 ctx,
@@ -308,18 +356,19 @@ def refresh_residual(job: Job, ctx: Context) -> None:
         job.residual.path = None
         return
     directory = ctx.store.dir(job.id)
-    update_step(job, ctx, StepStatus(key="residual", status="running"))
-    compute_residual(
-        directory / job.audio_path,
-        [
-            directory / s.track_path
-            for s in job.sources
-            if s.origin == "separated" and s.track_path
-        ],
-        directory / "residual.wav",
-    )
-    job.residual.path = "residual.wav"
-    update_step(job, ctx, StepStatus(key="residual", status="done"))
+    with _measure(job, ctx, "residual"):
+        update_step(job, ctx, StepStatus(key="residual", status="running"))
+        compute_residual(
+            directory / job.audio_path,
+            [
+                directory / s.track_path
+                for s in job.sources
+                if s.origin == "separated" and s.track_path
+            ],
+            directory / "residual.wav",
+        )
+        job.residual.path = "residual.wav"
+        update_step(job, ctx, StepStatus(key="residual", status="done"))
 
 
 def analyze(
@@ -369,15 +418,20 @@ def analyze(
                 max_rounds=ctx.settings.max_plan_rounds,
             ),
         )
-        plans, issues = check_plans(
-            ctx.tools.plan(
+        with _measure(
+            job,
+            ctx,
+            "plan",
+            round_number=round_number,
+            model_id=ctx.settings.planner_model,
+        ):
+            planned = ctx.tools.plan(
                 directory / job.video_path,
                 directory / job.audio_path,
                 job.duration,
                 state.issues,
-            ),
-            job.duration,
-        )
+            )
+        plans, issues = check_plans(planned, job.duration)
         previous = {source.plan.name: source for source in job.sources}
         sources = []
         for i, plan_item in enumerate(plans, 1):
@@ -417,28 +471,45 @@ def analyze(
                 max_rounds=ctx.settings.max_plan_rounds,
             ),
         )
-        issues = state.issues or ctx.tools.validate_plan(
-            directory / job.video_path,
-            directory / job.audio_path,
-            [s.plan for s in job.sources],
-        )
-        for source in job.sources:
-            hint = source.plan.visual_hint
-            if hint is None or not ctx.settings.visual_prompt:
-                continue
-            try:
-                found = ctx.tools.locate(directory / job.video_path, hint).found
-                message = "visual hint target was not found"
-            except Exception as exc:
-                found, message = False, str(exc)
-            if not found:
-                issues.append(
-                    PlanIssue(
-                        source_name=source.plan.name,
-                        kind="visual_hint_not_found",
-                        message=message,
+        with _measure(
+            job,
+            ctx,
+            "validate",
+            round_number=state.round,
+            model_id=ctx.settings.planner_model,
+        ) as timing:
+            issues = state.issues or ctx.tools.validate_plan(
+                directory / job.video_path,
+                directory / job.audio_path,
+                [s.plan for s in job.sources],
+            )
+            for source in job.sources:
+                hint = source.plan.visual_hint
+                if hint is None or not ctx.settings.visual_prompt:
+                    continue
+                try:
+                    with _measure(
+                        job,
+                        ctx,
+                        "locate",
+                        source_id=source.id,
+                        round_number=state.round,
+                        model_id=ctx.settings.sam3_model,
+                    ):
+                        found = ctx.tools.locate(directory / job.video_path, hint).found
+                    message = "visual hint target was not found"
+                except Exception as exc:
+                    found, message = False, str(exc)
+                if not found:
+                    issues.append(
+                        PlanIssue(
+                            source_name=source.plan.name,
+                            kind="visual_hint_not_found",
+                            message=message,
+                        )
                     )
-                )
+            if issues:
+                timing.status = "warning"
         job.plan_issues = issues
         update_step(
             job,
@@ -479,9 +550,13 @@ def analyze(
         refresh_residual(job, ctx)
         return {}
 
+    def timed_preprocess(state: AnalysisState) -> dict:
+        with _measure(job, ctx, "preprocess"):
+            return preprocess(state)
+
     builder = StateGraph(AnalysisState)
     for name, node in [
-        ("preprocess", preprocess),
+        ("preprocess", timed_preprocess),
         ("plan", plan),
         ("validate", validate),
         ("separate", separate),
@@ -503,32 +578,37 @@ def analyze(
     builder.add_edge("separate", "residual")
     builder.add_edge("residual", END)
     error = None
-    try:
-        builder.compile().invoke(
-            AnalysisState(job=job),
-            {"recursion_limit": 2 * ctx.settings.max_plan_rounds + 10},
-        )
-    except Exception as exc:
-        error = str(exc)
-        update_step(
-            job, ctx, StepStatus(key=active_key, status="failed", message=error)
-        )
-    finally:
-        on_finish()
-    # Set the final state only now: the job object is shared, so any save after
-    # this line publishes it, and on_finish must already have run.
-    if error is None:
-        job.state = "ready"
-    else:
-        job.state, job.error = "failed", error
-    return ctx.store.save(job)
+    with _measure(job, ctx, "analysis_total") as timing:
+        try:
+            builder.compile().invoke(
+                AnalysisState(job=job),
+                {"recursion_limit": 2 * ctx.settings.max_plan_rounds + 10},
+            )
+        except Exception as exc:
+            error = str(exc)
+            timing.status = "failed"
+            update_step(
+                job, ctx, StepStatus(key=active_key, status="failed", message=error)
+            )
+        finally:
+            on_finish()
+        # Set the final state only now: the job object is shared, so any save after
+        # this line publishes it, and on_finish must already have run.
+        if error is None:
+            job.state = "ready"
+        else:
+            job.state, job.error = "failed", error
+        return ctx.store.save(job)
 
 
 def handle_command(job: Job, cmd: Command, ctx: Context) -> Job:
     if isinstance(cmd, Render):
         update_step(job, ctx, StepStatus(key="render", status="running"))
         try:
-            job.outputs = render(job, ctx.store.dir(job.id), cmd.include_residual_stem)
+            with _measure(job, ctx, "render"):
+                job.outputs = render(
+                    job, ctx.store.dir(job.id), cmd.include_residual_stem
+                )
         except Exception as exc:
             update_step(
                 job, ctx, StepStatus(key="render", status="failed", message=str(exc))

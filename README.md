@@ -128,6 +128,7 @@ flowchart LR
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | 서버 구성, 용어, 검증과 재시도, 계약·함수·명령·API, 코드 위치 |
 | [docs/running.md](docs/running.md) | 실행 방법, 플래너 연결, LangSmith, 가중치 준비, 설정 |
+| [docs/performance.md](docs/performance.md) | 단계별 실행 시간 CSV와 모델 로딩·처리 시간 확인 |
 | [docs/contributing.md](docs/contributing.md) | 코드 규칙, 브랜치와 커밋, CI/CD, 로컬 검사 |
 | [docs/status.md](docs/status.md) | 모듈별 남은 과제, 실측 기록 |
 | [설계 문서](docs/superpowers/specs/) | 단계별 설계와 결정 기록 |

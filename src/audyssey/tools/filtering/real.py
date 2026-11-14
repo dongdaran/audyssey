@@ -8,6 +8,7 @@ from threading import Lock
 from audyssey.contracts import FilterResult, SourcePlan
 from audyssey.media import read_wav
 from audyssey.settings import Settings
+from audyssey.timing import measure_tool_metric
 
 # shortcut: one GPU model per process, one call at a time; batch or queue if throughput matters
 _model_lock = Lock()
@@ -37,20 +38,22 @@ def _load():
 def judge(mono: Path, track: Path, plan: SourcePlan) -> FilterResult:
     settings = Settings()
     with _model_lock:
-        torch, model, processor = _load()
-        batch = processor(
-            text=[plan.description],
-            input_audio=[torch.from_numpy(read_wav(mono).T)],
-            separated_audio=[torch.from_numpy(read_wav(track).T)],
-            sampling_rate=48000,
-        ).to(settings.sam_audio_device)
-        with torch.inference_mode():
-            result = model(**batch)
-        scores = {}
-        for name in ("overall", "recall", "precision", "faithfulness"):
-            value = getattr(result, name, None)
-            if value is not None:
-                scores[name] = float(value.item())
+        with measure_tool_metric("model_load"):
+            torch, model, processor = _load()
+        with measure_tool_metric("processing"):
+            batch = processor(
+                text=[plan.description],
+                input_audio=[torch.from_numpy(read_wav(mono).T)],
+                separated_audio=[torch.from_numpy(read_wav(track).T)],
+                sampling_rate=48000,
+            ).to(settings.sam_audio_device)
+            with torch.inference_mode():
+                result = model(**batch)
+            scores = {}
+            for name in ("overall", "recall", "precision", "faithfulness"):
+                value = getattr(result, name, None)
+                if value is not None:
+                    scores[name] = float(value.item())
     overall = scores["overall"]
     threshold = settings.judge_pass_threshold
     passed = overall >= threshold

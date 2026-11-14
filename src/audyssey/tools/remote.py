@@ -1,5 +1,7 @@
 import httpx
 
+from audyssey.timing import record_server_timing
+
 
 def post(
     url: str,
@@ -24,6 +26,7 @@ def post(
         raise RuntimeError(
             f"tool server {display_url} failed: {type(exc).__name__}"
         ) from None
+    record_server_timing(response.headers.get("server-timing"))
     if not response.is_success:
         raise RuntimeError(f"tool server {display_url} failed: {response.status_code}")
     return response
