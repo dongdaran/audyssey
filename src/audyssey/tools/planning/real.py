@@ -167,7 +167,7 @@ def plan(
         "without detailed narration or unnecessary adjectives. "
         "Use common nouns only; do not use proper names, brands, character names, "
         "or specialized terminology. A source is one sound-producing entity. "
-        "Do not split the same entity; use multiple spans for repeated sounds. "
+        "Do not split the same entity;"
         "Kinds: dialogue, sfx, music, ambience. Only original audio is available; "
         "identify sounds actually audible in the audio. Estimate span start/end "
         "in fractional seconds (for example, 1.25 to 2.70). Use the audio to "

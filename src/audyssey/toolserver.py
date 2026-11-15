@@ -1,3 +1,5 @@
+from io import BytesIO
+from zipfile import ZipFile
 from importlib import import_module
 from pathlib import Path
 from secrets import compare_digest
@@ -60,6 +62,7 @@ def create_tool_app(
             mono: UploadFile,
             plan: Annotated[str, Form()],
             attempt: Annotated[int, Form()],
+            include_residual: Annotated[bool, Form()] = False,
             video: UploadFile | None = None,
         ) -> Response:
             source_plan = parse_plan(plan)
@@ -73,6 +76,13 @@ def create_tool_app(
                     out = separation.separate(
                         mono_path, source_plan, video_path, root / "track.wav", attempt
                     )
+                residual = out.with_name(f"{out.stem}_resi.wav")
+                if include_residual and residual.is_file():
+                    buffer = BytesIO()
+                    with ZipFile(buffer, "w") as archive:
+                        archive.write(out, "track.wav")
+                        archive.write(residual, "track_resi.wav")
+                    return Response(buffer.getvalue(), media_type="application/zip")
                 return Response(out.read_bytes(), media_type="audio/wav")
 
     if "filtering" in tools:
@@ -138,6 +148,13 @@ def create_tool_app(
                     out = generation.generate(
                         video_path, source_plan, root / "track.wav", seed
                     )
+                residual = out.with_name(f"{out.stem}_resi.wav")
+                if include_residual and residual.is_file():
+                    buffer = BytesIO()
+                    with ZipFile(buffer, "w") as archive:
+                        archive.write(out, "track.wav")
+                        archive.write(residual, "track_resi.wav")
+                    return Response(buffer.getvalue(), media_type="application/zip")
                 return Response(out.read_bytes(), media_type="audio/wav")
 
         @app.post("/score")

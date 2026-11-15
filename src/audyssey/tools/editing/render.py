@@ -1,4 +1,5 @@
 import subprocess
+from shutil import copyfile
 from pathlib import Path
 
 import numpy as np
@@ -57,6 +58,11 @@ def render(job: Job, job_dir: Path, include_residual_stem: bool) -> RenderOutput
         if not source.keep or source.track_path is None:
             continue
         path = job_dir / source.track_path
+        residual_path = path.with_name(f"{path.stem}_resi.wav")
+        if source.origin == "separated" and residual_path.is_file():
+            residual_stem = stems_dir / f"{source.id}_resi.wav"
+            copyfile(residual_path, residual_stem)
+            stems.append(str(residual_stem.relative_to(job_dir)))
         if source.pitch_semitones:
             path = shift_pitch(
                 path, out / f"pitch_{source.id}.wav", source.pitch_semitones

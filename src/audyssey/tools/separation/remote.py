@@ -1,3 +1,5 @@
+from io import BytesIO
+from zipfile import ZipFile
 from pathlib import Path
 
 from audyssey.contracts import SourcePlan
@@ -16,10 +18,15 @@ def separate(
         settings.separator_url,
         "/separate",
         files,
-        {"plan": plan.model_dump_json(), "attempt": str(attempt)},
+        {"plan": plan.model_dump_json(), "attempt": str(attempt), "include_residual": "true"},
         settings.tool_token,
         settings.remote_timeout_s,
     )
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(response.content)
+    if response.headers.get("content-type", "").split(";")[0] == "application/zip":
+        with ZipFile(BytesIO(response.content)) as archive:
+            out.write_bytes(archive.read("track.wav"))
+            out.with_name(f"{out.stem}_resi.wav").write_bytes(archive.read("track_resi.wav"))
+    else:
+        out.write_bytes(response.content)
     return out

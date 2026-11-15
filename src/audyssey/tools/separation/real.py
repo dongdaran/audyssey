@@ -73,6 +73,8 @@ def separate(
         with measure_tool_metric("processing"):
             audio = read_wav(mono)
             track = np.zeros((len(audio), 1), dtype=np.float32)
+            residual_sum = np.zeros_like(track)
+            residual_weights = np.zeros_like(track)
             weights = np.zeros((len(audio), 1), dtype=np.float32)
             windows = []
             for span in plan.spans:
@@ -120,6 +122,14 @@ def separate(
                     length = min(end - start, len(target))
                     track[start:start + length] += target[:length]
                     weights[start:start + length] += 1
+                    residual = result.residual[0].detach().cpu().float().numpy().reshape(-1, 1)
+                    residual_length = min(end - start, len(residual))
+                    residual_sum[start:start + residual_length] += residual[:residual_length]
+                    residual_weights[start:start + residual_length] += 1
             # Average overlapping context rather than doubling its amplitude.
             np.divide(track, weights, out=track, where=weights > 0)
+            residual_track = audio.copy()
+            np.divide(residual_sum, residual_weights, out=residual_track,
+                      where=residual_weights > 0)
+            write_wav(out.with_name(f"{out.stem}_resi.wav"), residual_track)
             return write_wav(out, track)
