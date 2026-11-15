@@ -42,9 +42,19 @@ _Response = TypeVar("_Response", bound=Model)
 
 
 def _messages(
-    video: Path, settings: Settings, system: str, text: str
+    video: Path, audio: Path, settings: Settings, system: str, text: str
 ) -> list[ChatCompletionMessageParam]:
-    content: list[ChatCompletionContentPartParam] = [{"type": "text", "text": text}]
+    content: list[ChatCompletionContentPartParam] = [
+        {"type": "text", "text": text},
+        {"type": "text", "text": "Original audio, starting at video time 0 seconds."},
+        {
+            "type": "input_audio",
+            "input_audio": {
+                "data": base64.b64encode(audio.read_bytes()).decode("ascii"),
+                "format": "wav",
+            },
+        },
+    ]
     with TemporaryDirectory() as tmp:
         for time, path in media.extract_frames(
             video, settings.planner_frames, Path(tmp)
@@ -70,7 +80,7 @@ def _request(
 ) -> _Response:
     with llm.chat_client(settings) as client:
         for attempt in range(2):
-            # Record model/usage only: the SDK wrapper would also trace JPEG bytes.
+            # Record model/usage only: the SDK wrapper would also trace media bytes.
             with trace(
                 "planner_completion",
                 run_type="llm",
@@ -165,6 +175,7 @@ def plan(
     settings = Settings()
     messages = _messages(
         video,
+        audio,
         settings,
         "You are an audio captioner identifying sound sources. "
         "Use short, plain captions for source names and descriptions, such as "
@@ -173,9 +184,12 @@ def plan(
         "Use common nouns only; do not use proper names, brands, character names, "
         "or specialized terminology. A source is one sound-producing entity. "
         "Do not split the same entity; use multiple spans for repeated sounds. "
-        "Kinds: dialogue, sfx, music, ambience. Only frames are available, no audio; "
-        "infer likely sources without claiming to hear them. Spans and hint times "
-        "are seconds; boxes are [x0,y0,x1,y1] normalized to 0..1. "
+        "Kinds: dialogue, sfx, music, ambience. Original audio and video frames are available; "
+        "identify sounds actually audible in the audio; use frames to locate visible sources. Spans and hint times "
+        "are seconds. Estimate span start/end and hint times using fractional "
+        "seconds (for example, 1.25 to 2.70)"
+        "Use the audio to estimate sound boundaries and frame timestamps to locate sources; do not invent precision "
+        "unsupported by the audio and frames. Boxes are [x0,y0,x1,y1] normalized to 0..1. "
         "Offscreen sources have visual_hint=null. Return JSON with a sources list. "
         "Each source follows this schema: "
         + json.dumps(SourcePlan.model_json_schema()),
@@ -207,9 +221,10 @@ def validate_plan(video: Path, audio: Path, plans: list[SourcePlan]) -> list[Pla
     settings = Settings()
     messages = _messages(
         video,
+        audio,
         settings,
-        "Check the source list against the frames. Report only suspicious sources; "
-        "do not report unsupported guesses about unheard audio. "
+        "Check the source list against the original audio and video frames. "
+        "Report missing or inaudible sources, incorrect sound captions, and incorrect time spans. Verify short, plain captions without speculative narration. Use audio as evidence of sound presence and timing, and frames for visual hints. "
         "Return JSON with an issues list (empty when none). Each issue follows: "
         + json.dumps(PlanIssue.model_json_schema()),
         "Sources: " + json.dumps([source.model_dump() for source in plans]),
