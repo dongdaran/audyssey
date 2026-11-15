@@ -1,8 +1,5 @@
 from functools import cache
 from importlib import import_module
-import math
-import subprocess
-from tempfile import TemporaryDirectory
 from pathlib import Path
 from threading import Lock
 
@@ -72,55 +69,25 @@ def separate(
             torch, model, processor = _load()
         with measure_tool_metric("processing"):
             audio = read_wav(mono)
+            anchors = (
+                [[["+", span.start, span.end] for span in plan.spans]]
+                if plan.spans else None
+            )
+            batch = processor(
+                descriptions=[plan.name],
+                audios=[torch.from_numpy(audio.T)],
+                anchors=anchors,
+                **({"masked_videos": [str(video)]} if video is not None else {}),
+            ).to(settings.sam_audio_device)
+            with torch.inference_mode():
+                torch.manual_seed(attempt)
+                result = model.separate(
+                    batch,
+                    reranking_candidates=settings.sam_audio_reranking_candidates,
+                    predict_spans=settings.sam_audio_predict_spans,
+                )
+            target = result.target[0].detach().cpu().float().numpy().reshape(-1, 1)
             track = np.zeros((len(audio), 1), dtype=np.float32)
-            weights = np.zeros((len(audio), 1), dtype=np.float32)
-            # Each event gets its own context, including half a second on both sides.
-            windows = []
-            for span in plan.spans:
-                if span.start >= len(audio) / 48000 or span.end <= 0:
-                    continue
-                start = max(0, min(len(audio), math.floor((span.start - 0.5) * 48000)))
-                end = max(0, min(len(audio), math.ceil((span.end + 0.5) * 48000)))
-                if start < end:
-                    windows.append((start, end, span))
-            if not plan.spans:
-                windows = [(0, len(audio), None)]
-            if not windows:
-                raise ValueError("no planning spans overlap the input audio")
-            with TemporaryDirectory() as tmp:
-                for index, (start, end, span) in enumerate(windows):
-                    offset = start / 48000
-                    anchors = (
-                        [[["+", max(0., span.start - offset),
-                           min((end - start) / 48000, span.end - offset)]]]
-                        if span is not None else None
-                    )
-                    cropped_video = video
-                    if video is not None and span is not None:
-                        cropped_video = Path(tmp) / f"{index}.mp4"
-                        subprocess.run([
-                            "ffmpeg", "-v", "error", "-y", "-i", str(video),
-                            "-ss", str(offset), "-t", str((end - start) / 48000),
-                            "-an", "-c:v", "libx264", str(cropped_video),
-                        ], check=True, capture_output=True, text=True)
-                    batch = processor(
-                        descriptions=[plan.name],
-                        audios=[torch.from_numpy(audio[start:end].T)],
-                        anchors=anchors,
-                        **({"masked_videos": [str(cropped_video)]}
-                           if cropped_video is not None else {}),
-                    ).to(settings.sam_audio_device)
-                    with torch.inference_mode():
-                        torch.manual_seed(attempt)
-                        result = model.separate(
-                            batch,
-                            reranking_candidates=settings.sam_audio_reranking_candidates,
-                            predict_spans=settings.sam_audio_predict_spans,
-                        )
-                    target = result.target[0].detach().cpu().float().numpy().reshape(-1, 1)
-                    length = min(end - start, len(target))
-                    track[start:start + length] += target[:length]
-                    weights[start:start + length] += 1
-            # Overlapping context must not double the output amplitude.
-            np.divide(track, weights, out=track, where=weights > 0)
+            length = min(len(audio), len(target))
+            track[:length] = target[:length]
             return write_wav(out, track)
