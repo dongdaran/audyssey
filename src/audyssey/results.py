@@ -1,4 +1,5 @@
 """Read-only browser for batch results; no inference initialization."""
+import io
 import json
 from pathlib import Path
 from functools import lru_cache
@@ -6,7 +7,8 @@ from importlib.resources import files
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
+from scipy.io import wavfile
 from audyssey.media import read_wav
 
 
@@ -50,6 +52,24 @@ def create_results_app(root: Path) -> FastAPI:
     @app.get('/api/file')
     def media(path: str):
         return FileResponse(resolve(path))
+
+    @lru_cache(maxsize=32)
+    def listening_audio(path: str, size: int, modified: int) -> bytes:
+        data = read_wav(Path(path))
+        pcm = (np.clip(np.nan_to_num(data), -1, 1) * 32767).astype(np.int16)
+        stream = io.BytesIO()
+        wavfile.write(stream, 48000, pcm)
+        return stream.getvalue()
+
+    @app.get('/api/audio')
+    def audio(path: str):
+        p = resolve(path)
+        try:
+            stat = p.stat()
+            return Response(listening_audio(str(p), stat.st_size, stat.st_mtime_ns),
+                            media_type='audio/wav')
+        except Exception as exc:
+            raise HTTPException(422, 'Audio decoding failed') from exc
 
     @lru_cache(maxsize=256)
     def peaks(path: str, size: int, modified: int):
