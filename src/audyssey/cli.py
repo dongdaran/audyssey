@@ -43,6 +43,14 @@ def batch(
 
 
 @app.command()
+def results(root: Path = Path("/audyssey-results"), host: str = "0.0.0.0", port: int = 8610) -> None:
+    """Browse saved batch results without loading models."""
+    from audyssey.results import create_results_app
+    typer.echo(f"Results: http://<server-ip>:{port} (root: {root})")
+    uvicorn.run(create_results_app(root), host=host, port=port)
+
+
+@app.command()
 def serve(host: str = "127.0.0.1", port: int = 8600) -> None:
     uvicorn.run(create_app(), host=host, port=port)
 

@@ -166,7 +166,12 @@ def plan(
     messages = _messages(
         video,
         settings,
-        "You are an audio source planner. A source is one sound-producing entity. "
+        "You are an audio captioner identifying sound sources. "
+        "Use short, plain captions for source names and descriptions, such as "
+        "'dog barking' or 'trumpet'. Give enough information to identify the sound "
+        "without detailed narration or unnecessary adjectives. "
+        "Use common nouns only; do not use proper names, brands, character names, "
+        "or specialized terminology. A source is one sound-producing entity. "
         "Do not split the same entity; use multiple spans for repeated sounds. "
         "Kinds: dialogue, sfx, music, ambience. Only frames are available, no audio; "
         "infer likely sources without claiming to hear them. Spans and hint times "
