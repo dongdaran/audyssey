@@ -4,7 +4,6 @@ import base64
 import json
 import logging
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import TypeVar
 
 from langsmith import trace
@@ -13,7 +12,6 @@ from openai import APIStatusError
 from openai.types.chat import ChatCompletionContentPartParam, ChatCompletionMessageParam
 from pydantic import TypeAdapter, ValidationError
 
-from audyssey import media
 from audyssey.contracts import Model, PlanIssue, SourcePlan, Span, VisualHint
 from audyssey.settings import Settings
 from audyssey.tools.planning import llm
@@ -42,7 +40,7 @@ _Response = TypeVar("_Response", bound=Model)
 
 
 def _messages(
-    video: Path, audio: Path, settings: Settings, system: str, text: str
+    audio: Path, system: str, text: str
 ) -> list[ChatCompletionMessageParam]:
     content: list[ChatCompletionContentPartParam] = [
         {"type": "text", "text": text},
@@ -55,18 +53,6 @@ def _messages(
             },
         },
     ]
-    with TemporaryDirectory() as tmp:
-        for time, path in media.extract_frames(
-            video, settings.planner_frames, Path(tmp)
-        ):
-            content.append({"type": "text", "text": f"Frame at {time:g} seconds"})
-            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-            content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{encoded}"},
-                }
-            )
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": content},
@@ -174,9 +160,7 @@ def plan(
 ) -> list[SourcePlan]:
     settings = Settings()
     messages = _messages(
-        video,
         audio,
-        settings,
         "You are an audio captioner identifying sound sources. "
         "Use short, plain captions for source names and descriptions, such as "
         "'dog barking' or 'trumpet'. Give enough information to identify the sound "
@@ -184,13 +168,12 @@ def plan(
         "Use common nouns only; do not use proper names, brands, character names, "
         "or specialized terminology. A source is one sound-producing entity. "
         "Do not split the same entity; use multiple spans for repeated sounds. "
-        "Kinds: dialogue, sfx, music, ambience. Original audio and video frames are available; "
-        "identify sounds actually audible in the audio; use frames to locate visible sources. Spans and hint times "
-        "are seconds. Estimate span start/end and hint times using fractional "
-        "seconds (for example, 1.25 to 2.70)"
-        "Use the audio to estimate sound boundaries and frame timestamps to locate sources; do not invent precision "
-        "unsupported by the audio and frames. Boxes are [x0,y0,x1,y1] normalized to 0..1. "
-        "Offscreen sources have visual_hint=null. Return JSON with a sources list. "
+        "Kinds: dialogue, sfx, music, ambience. Only original audio is available; "
+        "identify sounds actually audible in the audio. Estimate span start/end "
+        "in fractional seconds (for example, 1.25 to 2.70). Use the audio to "
+        "estimate sound boundaries; do not invent unsupported precision. "
+        "No visual information is available: always set visual_hint=null. "
+        "Return JSON with a sources list. "
         "Each source follows this schema: "
         + json.dumps(SourcePlan.model_json_schema()),
         f"Video duration: {duration:g} seconds. Feedback: "
@@ -220,11 +203,9 @@ def plan(
 def validate_plan(video: Path, audio: Path, plans: list[SourcePlan]) -> list[PlanIssue]:
     settings = Settings()
     messages = _messages(
-        video,
         audio,
-        settings,
-        "Check the source list against the original audio and video frames. "
-        "Report missing or inaudible sources, incorrect sound captions, and incorrect time spans. Verify short, plain captions without speculative narration. Use audio as evidence of sound presence and timing, and frames for visual hints. "
+        "Check the source list against the original audio only. "
+        "Report missing or inaudible sources, incorrect sound captions, and incorrect time spans. Verify short, plain captions without speculative narration. Use audio as evidence of sound presence and timing, require visual_hint=null because no visual information is available. "
         "Return JSON with an issues list (empty when none). Each issue follows: "
         + json.dumps(PlanIssue.model_json_schema()),
         "Sources: " + json.dumps([source.model_dump() for source in plans]),
