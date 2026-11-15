@@ -450,7 +450,8 @@ def analyze(
             ctx,
             "plan",
             round_number=round_number,
-            model_id=ctx.settings.planner_model,
+            model_id=(ctx.settings.tempo_model if ctx.settings.planner == "tempo"
+                      else ctx.settings.planner_model),
         ):
             planned = ctx.tools.plan(
                 directory / job.video_path,

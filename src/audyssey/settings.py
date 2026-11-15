@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AUDYSSEY_")
 
-    planner: Literal["stub", "real"] = "stub"
+    planner: Literal["stub", "real", "tempo"] = "stub"
     separator: Literal["stub", "real", "remote"] = "stub"
     filter: Literal["stub", "real", "remote"] = "stub"
     grounder: Literal["stub", "real", "remote"] = "stub"
@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     filter_url: str = ""
     tool_token: str = Field(default="", repr=False)
     remote_timeout_s: float = Field(default=600, gt=0)
+    tempo_python: str = ""
+    tempo_repo: str = ""
+    tempo_model: str = "Kaousheik/tempo-rl-multitask"
     planner_base_url: str = ""
     planner_frames: int = Field(default=4, ge=1, le=16)
     planner_model: str = ""
