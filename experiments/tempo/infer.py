@@ -14,6 +14,33 @@ PROMPTS = {
 }
 
 
+def restore_projector(model, checkpoint, swap, bind_safe):
+    """Restore the projector on the module actually used by forward()."""
+    owner = model if hasattr(model, 'multi_modal_projector') else model.model
+    if not hasattr(owner, 'multi_modal_projector'):
+        raise RuntimeError('Unsupported AudioFlamingo3 projector layout')
+    swap(owner, time_dim=64, frame_duration=0.04, checkpoint_dir=str(checkpoint))
+    bind_safe(owner)
+
+
+def load_model(checkpoint):
+    import torch
+    from transformers import AutoProcessor, AudioFlamingo3ForConditionalGeneration
+    from time_aware_projector import swap_to_time_aware_projector
+    from infer_worker import _bind_safe_projector_forward
+
+    processor = AutoProcessor.from_pretrained(str(checkpoint))
+    model = AudioFlamingo3ForConditionalGeneration.from_pretrained(
+        str(checkpoint), torch_dtype=torch.bfloat16)
+    if len(processor.tokenizer) != model.get_input_embeddings().num_embeddings:
+        raise RuntimeError('TEMPO tokenizer and model embedding sizes differ')
+    restore_projector(model, checkpoint, swap_to_time_aware_projector,
+                      _bind_safe_projector_forward)
+    model.to('cuda:0').eval()
+    model.config.use_cache = True
+    return model, processor
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('audio', type=Path)
@@ -27,13 +54,13 @@ def main():
     if not torch.cuda.is_available():
         raise RuntimeError('TEMPO inference requires a CUDA GPU')
     sys.path[:0] = [str(args.repo.resolve() / 'evaluation'), str(args.repo.resolve() / 'sft')]
-    from infer_worker import load_model, build_conversation, _NON_TS_SPECIALS
+    from infer_worker import build_conversation, _NON_TS_SPECIALS
     checkpoint = Path(args.model)
     if not checkpoint.is_dir():
         checkpoint = Path(snapshot_download(args.model))
     if not (checkpoint / 'time_proj.pt').is_file():
         raise RuntimeError('TEMPO checkpoint is missing required time_proj.pt')
-    model, processor = load_model(str(checkpoint), 64, 0.04)
+    model, processor = load_model(checkpoint)
     question = PROMPTS[args.task]
     conversation = build_conversation(question, str(args.audio.resolve()), None)
     inputs = processor.apply_chat_template([conversation], tokenize=True,
