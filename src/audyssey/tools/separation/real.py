@@ -75,7 +75,7 @@ def separate(
                 else None
             )
             batch = processor(
-                descriptions=[plan.description],
+                descriptions=[plan.name],
                 audios=[torch.from_numpy(audio.T)],
                 anchors=anchors,
                 **({"masked_videos": [str(video)]} if video is not None else {}),

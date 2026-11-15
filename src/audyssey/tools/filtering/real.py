@@ -42,7 +42,7 @@ def judge(mono: Path, track: Path, plan: SourcePlan) -> FilterResult:
             torch, model, processor = _load()
         with measure_tool_metric("processing"):
             batch = processor(
-                text=[plan.description],
+                text=[plan.name],
                 input_audio=[torch.from_numpy(read_wav(mono).T)],
                 separated_audio=[torch.from_numpy(read_wav(track).T)],
                 sampling_rate=48000,
