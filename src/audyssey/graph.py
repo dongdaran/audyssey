@@ -1,5 +1,6 @@
 from typing import Literal
 import json
+from shutil import copyfile
 from collections.abc import Callable
 from functools import wraps
 from pathlib import Path
@@ -240,6 +241,7 @@ def process_source(job: Job, source: Source, ctx: Context) -> None:
         generate_source(job, source, ctx)
         return
     directory = ctx.store.dir(job.id)
+    separation_input = directory / (source.separation_input_path or job.mono_path)
     maximum = ctx.settings.max_separation_retries + 1
     source.status = "running"
     masked_for, video = None, None
@@ -283,8 +285,10 @@ def process_source(job: Job, source: Source, ctx: Context) -> None:
                 attempt=source.attempts,
                 model_id=ctx.settings.sam_audio_model,
             ):
+                # A failed/older separator must not leave a previous attempt's residual.
+                (directory / f"tracks/{source.id}_resi.wav").unlink(missing_ok=True)
                 path = ctx.tools.separate(
-                    directory / job.mono_path,
+                    separation_input,
                     source.plan,
                     video,
                     directory / f"tracks/{source.id}.wav",
@@ -320,7 +324,7 @@ def process_source(job: Job, source: Source, ctx: Context) -> None:
                 model_id=ctx.settings.sam_audio_judge_model,
             ) as timing:
                 source.filter = ctx.tools.judge(
-                    directory / job.mono_path, path, source.plan
+                    separation_input, path, source.plan
                 )
                 if not source.filter.passed:
                     timing.status = "warning"
@@ -363,6 +367,38 @@ def process_source(job: Job, source: Source, ctx: Context) -> None:
             ),
         )
     ctx.store.save(job)
+
+
+def process_sources(job: Job, ctx: Context) -> None:
+    """Remove music first; every foreground uses the same frozen residual."""
+    music = [s for s in job.sources if s.origin == "separated" and s.plan.kind == "music"]
+    if job.silent or not ctx.settings.music_first or not music:
+        for source in job.sources:
+            source.separation_input_path = None
+            process_source(job, source, ctx)
+        return
+    directory = ctx.store.dir(job.id)
+    current_input = job.mono_path
+    for source in music:
+        source.separation_input_path = current_input
+        process_source(job, source, ctx)
+        if source.status != "done" or source.track_path is None:
+            raise RuntimeError(f"music-first separation failed for {source.id}")
+        target = directory / source.track_path
+        residual = target.with_name(f"{target.stem}_resi.wav")
+        if not residual.is_file():
+            raise RuntimeError(f"music-first requires model residual for {source.id}; update the separator")
+        # Freeze the exact input used downstream, even if music is later reseparated.
+        snapshot = f"inputs/{source.id}_music_residual.wav"
+        (directory / snapshot).parent.mkdir(parents=True, exist_ok=True)
+        copyfile(residual, directory / snapshot)
+        current_input = snapshot
+    for source in job.sources:
+        if source in music:
+            continue
+        source.separation_input_path = current_input
+        process_source(job, source, ctx)
+
 
 
 @dataclass
@@ -569,9 +605,7 @@ def analyze(
     def separate(state: AnalysisState) -> dict:
         nonlocal active_key
         active_key = "separate"
-        # ponytail: sequential per-source loop, fan out with Send when real GPU tools need parallelism
-        for source in job.sources:
-            process_source(job, source, ctx)
+        process_sources(job, ctx)
         return {}
 
     def residual(state: AnalysisState) -> dict:

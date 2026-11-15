@@ -77,6 +77,7 @@ class Source(Model):
     origin: Literal["separated", "generated"] = "separated"
     replaces: str | None = None
     track_path: str | None = None
+    separation_input_path: str | None = None
     filter: FilterResult | None = None
     status: SourceStatus = "pending"
     attempts: int = 0

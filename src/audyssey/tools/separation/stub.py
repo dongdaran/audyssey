@@ -14,4 +14,5 @@ def separate(
     for span in plan.spans:
         start, end = round(span.start * 48000), round(span.end * 48000)
         track[start:end] = audio[start:end]
+    write_wav(out.with_name(f"{out.stem}_resi.wav"), audio - track)
     return write_wav(out, track)
