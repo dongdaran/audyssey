@@ -70,7 +70,8 @@ def separate(
         with measure_tool_metric("processing"):
             audio = read_wav(mono)
             anchors = (
-                [[["+", span.start, span.end] for span in plan.spans]]
+                [[["+", min(span.start for span in plan.spans),
+                   max(span.end for span in plan.spans)]]]
                 if plan.spans
                 else None
             )
