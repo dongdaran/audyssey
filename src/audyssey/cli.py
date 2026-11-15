@@ -43,7 +43,11 @@ def batch(
 
 
 @app.command()
-def results(root: Path = Path("/audyssey-results"), host: str = "0.0.0.0", port: int = 8610) -> None:
+def results(
+    root: Annotated[Path, typer.Argument(help="Batch results root directory.")] = Path("/audyssey-results"),
+    host: str = "0.0.0.0",
+    port: int = 8610,
+) -> None:
     """Browse saved batch results without loading models."""
     from audyssey.results import create_results_app
     typer.echo(f"Results: http://<server-ip>:{port} (root: {root})")
